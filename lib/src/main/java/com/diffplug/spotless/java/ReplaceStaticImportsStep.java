@@ -17,23 +17,26 @@ package com.diffplug.spotless.java;
 
 import com.diffplug.spotless.FormatterFunc;
 import com.diffplug.spotless.FormatterStep;
-import com.diffplug.spotless.SerializableFileFilter;
-
-import javax.print.attribute.standard.MediaSize;
 
 import java.io.File;
+import java.io.IOException;
 import java.io.Serializable;
+import java.lang.reflect.Method;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
 
 public final class ReplaceStaticImportsStep {
 
 	private ReplaceStaticImportsStep() {}
 
 	private static final String NAME = "replaceStaticImports";
-	private static final String STATIC_IMPORTS = "import static %s;";
+	private static final String STATIC_IMPORTS = "import static";
 
 	public static boolean isReplaceStaticImportsStep(FormatterStep step) {
 		return step.getName().equals(NAME);
@@ -57,34 +60,73 @@ public final class ReplaceStaticImportsStep {
 		}
 
 		FormatterFunc toFormatter() {
-			return State::replaceStaticImports;
+			return unixStr -> replaceStaticImports(unixStr, classpath);
 		}
 
-		private static String replaceStaticImports(String unixStr) {
+		private String replaceStaticImports(String unixStr, Set<File> classpath) {
 			String[] lines = unixStr.split("((?<=\n))");
+
+			// Map of static method names to their references
+			Map<String, String> methodMap = new HashMap<>();
 
 			for (int i = 0; i < lines.length - 1; i++) {
 				String line = lines[i];
-				if(line.contains(STATIC_IMPORTS)) {
+
+				if(line.startsWith(STATIC_IMPORTS)) {
+
 					String[] items = line.split("\\.");
-					String memberName = items[items.length-1].replace(";", "");
+					String fullyQualifiedName = line.replace(STATIC_IMPORTS, "").replace(";", "");
+					String methodName = items[items.length-1].replace(";", "");
 					String className = items[items.length-2];
 
-					// If wildcard import, get all possible methods from classpath
+					if (methodName.contains("*")) {
+						methodMap.putAll(buildClasspathMethodMap(classpath, fullyQualifiedName, className));
+					}
+
+					methodMap.put(methodName, className);
+
 
 					// Repair import without static and with class name
 
 					// Find instances that the static import was used and append class name
 				}
 			}
+
+			System.out.println("Method map =====> \n" + methodMap);
 			return unixStr;
 		}
 
-		/** Generate a map of method names to their static classes */
-		private Map<String, String> staticMethodMap() {
-			Map<String, String> methodMap = new HashMap<>();
+		private Map<String,String> buildClasspathMethodMap(Set<File> classpath, String fullyQualifiedName, String className) {
+			HashMap<String, String> map = new HashMap<>();
 
-			return methodMap;
+			// Format the FQN to match Jar file entry
+			fullyQualifiedName =
+				fullyQualifiedName.substring(0, fullyQualifiedName.lastIndexOf('.')).trim();
+			String formattedFQN = fullyQualifiedName.replace('.', '/') + ".class";
+
+			for (File file : classpath) {
+				if (!file.getName().endsWith(".jar")) continue;
+
+				try ( JarFile jar = new JarFile(file);
+					  URLClassLoader classLoader = new URLClassLoader( new URL[]{ file.toURI().toURL() }) ){
+
+					JarEntry classFile = jar.getJarEntry(formattedFQN);
+					if (classFile != null) {
+						Class<?> clazz = classLoader.loadClass(fullyQualifiedName);
+						Method[] methods = clazz.getMethods();
+						for (int i = 0; i < methods.length -1; i++) {
+							map.put(methods[i].getName(), className);
+						}
+					}
+				} catch (IOException e) {
+					throw new RuntimeException("Could not load the Jar file for wildcard imports located at "
+						+ file.getAbsolutePath());
+				} catch (ClassNotFoundException e) {
+					throw new RuntimeException(e);
+				}
+			}
+
+			return map;
 		}
 	}
 }
