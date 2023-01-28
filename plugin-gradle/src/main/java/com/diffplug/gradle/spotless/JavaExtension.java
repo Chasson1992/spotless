@@ -19,15 +19,17 @@ import static com.diffplug.gradle.spotless.PluginGradlePreconditions.requireElem
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 import javax.inject.Inject;
 
 import org.gradle.api.GradleException;
 import org.gradle.api.Project;
 import org.gradle.api.file.FileCollection;
-import org.gradle.api.plugins.JavaPluginConvention;
+import org.gradle.api.plugins.JavaPluginExtension;
 import org.gradle.api.tasks.SourceSet;
 
 import com.diffplug.spotless.FormatterStep;
@@ -39,6 +41,7 @@ import com.diffplug.spotless.java.GoogleJavaFormatStep;
 import com.diffplug.spotless.java.ImportOrderStep;
 import com.diffplug.spotless.java.PalantirJavaFormatStep;
 import com.diffplug.spotless.java.RemoveUnusedImportsStep;
+import com.diffplug.spotless.java.ReplaceStaticImportsStep;
 
 public class JavaExtension extends FormatExtension implements HasBuiltinDelimiterForLicense {
 	static final String NAME = "java";
@@ -112,6 +115,11 @@ public class JavaExtension extends FormatExtension implements HasBuiltinDelimite
 	/** Removes any unused imports. */
 	public void removeUnusedImports() {
 		addStep(RemoveUnusedImportsStep.create(provisioner()));
+	}
+
+	/** Removes static imports and uses the static classes directly in the source files **/
+	public void replaceStaticImports() {
+		addStep(ReplaceStaticImportsStep.create());
 	}
 
 	/** Uses the <a href="https://github.com/google/google-java-format">google-java-format</a> jar to format source code. */
@@ -273,8 +281,9 @@ public class JavaExtension extends FormatExtension implements HasBuiltinDelimite
 	/** If the user hasn't specified the files yet, we'll assume he/she means all of the java files. */
 	@Override
 	protected void setupTask(SpotlessTask task) {
+		JavaPluginExtension javaPlugin = getProject().getExtensions().findByType(JavaPluginExtension.class);
+
 		if (target == null) {
-			JavaPluginConvention javaPlugin = getProject().getConvention().findPlugin(JavaPluginConvention.class);
 			if (javaPlugin == null) {
 				throw new GradleException("You must either specify 'target' manually or apply the 'java' plugin.");
 			}
@@ -288,6 +297,18 @@ public class JavaExtension extends FormatExtension implements HasBuiltinDelimite
 		steps.replaceAll(step -> {
 			if (isLicenseHeaderStep(step)) {
 				return step.filterByFile(LicenseHeaderStep.unsupportedJvmFilesFilter());
+			} else if (ReplaceStaticImportsStep.isReplaceStaticImportsStep(step)) {
+				if (javaPlugin == null) {
+					throw new GradleException("You must apply the 'java' plugin in order to use the " + step.getName() + " step");
+				}
+
+				// Get compile classpath for replacing static wildcard imports
+				Set<File> classpathSet = new HashSet<>();
+				javaPlugin.getSourceSets().forEach(
+					sourceSet -> sourceSet.getCompileClasspath().forEach(
+						classpathSet::add));
+
+				return ReplaceStaticImportsStep.createWithClasspathSet(classpathSet);
 			} else {
 				return step;
 			}

@@ -1,0 +1,7 @@
+import static org.enums.Value.SOME_ENUM_VALUE;
+
+public class Test {
+    public void method() {
+        var example = SOME_ENUM_VALUE;
+    }
+}
